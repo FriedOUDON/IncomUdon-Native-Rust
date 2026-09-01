@@ -34,18 +34,30 @@ fn main() -> Result<(), slint::PlatformError> {
     window.set_profile_save_status(SharedString::from(load_status));
 
     let pressed_window = window.as_weak();
+    let pressed_session = Arc::clone(&session);
     window.on_ptt_pressed(move || {
-        if let Some(window) = pressed_window.upgrade() {
-            if !window.get_receive_only() {
-                window.set_connection_status(SharedString::from("Transmitting"));
-            }
+        let Some(window) = pressed_window.upgrade() else {
+            return;
+        };
+        if window.get_receive_only() {
+            return;
+        }
+        match send_ptt_control(&pressed_session, PacketType::PttOn) {
+            Ok(()) => window.set_connection_status(SharedString::from("Requesting talk")),
+            Err(error) => window.set_connection_status(SharedString::from(error)),
         }
     });
 
     let released_window = window.as_weak();
+    let released_session = Arc::clone(&session);
     window.on_ptt_released(move || {
-        if let Some(window) = released_window.upgrade() {
-            window.set_connection_status(SharedString::from("Connected"));
+        let Some(window) = released_window.upgrade() else {
+            return;
+        };
+        match send_ptt_control(&released_session, PacketType::PttOff) {
+            Ok(()) => window.set_connection_status(SharedString::from("Connected")),
+            Err(error) if error == "Connect to the relay first" => {}
+            Err(error) => window.set_connection_status(SharedString::from(error)),
         }
     });
 
@@ -295,6 +307,15 @@ fn resolve_relay(relay: &RelayEndpoint) -> Result<SocketAddr, String> {
         .into_iter()
         .next()
         .ok_or_else(|| "no usable IPv4/IPv6 address was resolved".to_owned())
+}
+fn send_ptt_control(session: &SharedRelaySession, packet_type: PacketType) -> Result<(), String> {
+    let session = session.lock().expect("relay session lock poisoned");
+    let Some(relay_session) = session.as_ref() else {
+        return Err("Connect to the relay first".to_owned());
+    };
+    relay_session
+        .send_control(packet_type, Vec::new())
+        .map_err(|error| format!("PTT send failed: {error}"))
 }
 
 fn apply_relay_event(window: &AppWindow, event: RelayEvent) -> bool {

@@ -57,6 +57,10 @@ impl RelayConfig {
 #[derive(Debug, Clone)]
 pub enum RelayCommand {
     Send(Packet),
+    SendControl {
+        packet_type: PacketType,
+        payload: Vec<u8>,
+    },
     Disconnect,
 }
 
@@ -137,6 +141,21 @@ impl RelaySession {
             .map_err(|_| TransportError::WorkerUnavailable)
     }
 
+    /// Queues a Relay control packet. The worker assigns its sequence number so
+    /// control, keepalive, and future media packets share one ordered stream.
+    pub fn send_control(
+        &self,
+        packet_type: PacketType,
+        payload: Vec<u8>,
+    ) -> Result<(), TransportError> {
+        self.commands
+            .try_send(RelayCommand::SendControl {
+                packet_type,
+                payload,
+            })
+            .map_err(|_| TransportError::WorkerUnavailable)
+    }
+
     pub fn try_next_event(&self) -> Option<RelayEvent> {
         self.events.try_recv().ok()
     }
@@ -168,19 +187,48 @@ fn run_worker(
 ) {
     let _ = events.try_send(RelayEvent::Connected { local_addr });
     let mut sequence = 0_u16;
-    send_control(&socket, &config, &mut sequence, PacketType::Join, &events);
+    send_control(
+        &socket,
+        &config,
+        &mut sequence,
+        PacketType::Join,
+        Vec::new(),
+        &events,
+    );
     let mut last_keepalive = Instant::now();
     let mut buffer = [0_u8; 2048];
 
     while running.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(1)) {
             Ok(RelayCommand::Send(packet)) => send_packet(&socket, packet, &events),
+            Ok(RelayCommand::SendControl {
+                packet_type,
+                payload,
+            }) => send_control(
+                &socket,
+                &config,
+                &mut sequence,
+                packet_type,
+                payload,
+                &events,
+            ),
             Ok(RelayCommand::Disconnect) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
         }
         loop {
             match commands.try_recv() {
                 Ok(RelayCommand::Send(packet)) => send_packet(&socket, packet, &events),
+                Ok(RelayCommand::SendControl {
+                    packet_type,
+                    payload,
+                }) => send_control(
+                    &socket,
+                    &config,
+                    &mut sequence,
+                    packet_type,
+                    payload,
+                    &events,
+                ),
                 Ok(RelayCommand::Disconnect) | Err(TryRecvError::Disconnected) => {
                     running.store(false, Ordering::Release);
                     break;
@@ -197,6 +245,7 @@ fn run_worker(
                 &config,
                 &mut sequence,
                 PacketType::Keepalive,
+                Vec::new(),
                 &events,
             );
             last_keepalive = Instant::now();
@@ -220,7 +269,14 @@ fn run_worker(
         }
     }
 
-    send_control(&socket, &config, &mut sequence, PacketType::Leave, &events);
+    send_control(
+        &socket,
+        &config,
+        &mut sequence,
+        PacketType::Leave,
+        Vec::new(),
+        &events,
+    );
     let _ = events.try_send(RelayEvent::Stopped);
 }
 
@@ -229,6 +285,7 @@ fn send_control(
     config: &RelayConfig,
     sequence: &mut u16,
     packet_type: PacketType,
+    payload: Vec<u8>,
     events: &SyncSender<RelayEvent>,
 ) {
     let header = PacketHeader {
@@ -246,10 +303,7 @@ fn send_control(
     };
     *sequence = sequence.wrapping_add(1);
     let packet = if config.encryption == EncryptionMode::None {
-        Packet::Plain {
-            header,
-            payload: Vec::new(),
-        }
+        Packet::Plain { header, payload }
     } else {
         Packet::Secured {
             header,
@@ -257,7 +311,7 @@ fn send_control(
                 nonce: 0,
                 key_id: 0,
             },
-            payload: Vec::new(),
+            payload,
             auth_tag: [0; AUTH_TAG_LEN],
         }
     };
@@ -302,18 +356,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_sends_join_keepalive_and_leave_with_plain_secure_framing() {
+    fn session_sequences_ptt_controls_with_plain_secure_framing() {
         let relay = UdpSocket::bind("127.0.0.1:0").unwrap();
         relay
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
-        let mut config = RelayConfig::new(
+        let config = RelayConfig::new(
             relay.local_addr().unwrap(),
             111,
             1002,
             EncryptionMode::AesGcmV2,
         );
-        config.keepalive_interval = Duration::from_millis(20);
         let mut session = RelaySession::connect(config).unwrap();
 
         let mut buffer = [0_u8; 128];
@@ -321,14 +374,22 @@ mod tests {
         let join = Packet::decode(&buffer[..join_len]).unwrap();
         assert_control_packet(&join, PacketType::Join, 0);
 
-        let keepalive_len = relay.recv(&mut buffer).unwrap();
-        let keepalive = Packet::decode(&buffer[..keepalive_len]).unwrap();
-        assert_control_packet(&keepalive, PacketType::Keepalive, 1);
+        session.send_control(PacketType::PttOn, Vec::new()).unwrap();
+        let ptt_on_len = relay.recv(&mut buffer).unwrap();
+        let ptt_on = Packet::decode(&buffer[..ptt_on_len]).unwrap();
+        assert_control_packet(&ptt_on, PacketType::PttOn, 1);
+
+        session
+            .send_control(PacketType::PttOff, Vec::new())
+            .unwrap();
+        let ptt_off_len = relay.recv(&mut buffer).unwrap();
+        let ptt_off = Packet::decode(&buffer[..ptt_off_len]).unwrap();
+        assert_control_packet(&ptt_off, PacketType::PttOff, 2);
 
         session.disconnect();
         let leave_len = relay.recv(&mut buffer).unwrap();
         let leave = Packet::decode(&buffer[..leave_len]).unwrap();
-        assert_control_packet(&leave, PacketType::Leave, 2);
+        assert_control_packet(&leave, PacketType::Leave, 3);
     }
 
     fn assert_control_packet(packet: &Packet, expected_type: PacketType, expected_sequence: u16) {
