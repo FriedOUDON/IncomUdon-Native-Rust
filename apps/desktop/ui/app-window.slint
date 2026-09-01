@@ -1,0 +1,311 @@
+﻿import { CheckBox, ComboBox, LineEdit, SpinBox } from "std-widgets.slint";
+
+component NavigationItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback activated();
+
+    height: 46px;
+    background: selected ? #dce8ff : #00000000;
+    border-radius: 22px;
+
+    Text {
+        x: 18px;
+        width: parent.width - 36px;
+        vertical-alignment: center;
+        text: root.label;
+        color: selected ? #173b75 : #263238;
+        font-size: 15px;
+        font-weight: selected ? 700 : 500;
+    }
+    TouchArea { clicked => { root.activated(); } }
+}
+
+export component AppWindow inherits Window {
+    title: "IncomUdon";
+    min-width: 960px;
+    min-height: 640px;
+    preferred-width: 1280px;
+    preferred-height: 760px;
+    background: #f7f9fc;
+
+    in-out property <int> current-page: 0;
+    in-out property <string> profile-name: "Default";
+    in-out property <string> channel-id: "0";
+    in-out property <string> sender-id: "0";
+    in-out property <string> connection-status: "Disconnected";
+    in-out property <string> active-talker: "No active speaker";
+    in-out property <bool> receive-only: false;
+    in-out property <bool> mute-self-id: true;
+    in-out property <int> codec-index: 0;
+    in-out property <int> bitrate-bps: 16000;
+
+    callback ptt-pressed();
+    callback ptt-released();
+    callback profile-value-changed();
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            width: 244px;
+            background: #ffffff;
+            border-color: #d9e1e8;
+            border-width: 1px;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 6px;
+                Text {
+                    text: "IncomUdon";
+                    height: 48px;
+                    vertical-alignment: center;
+                    font-size: 25px;
+                    font-weight: 800;
+                    color: #153a70;
+                }
+                Text {
+                    text: "Native Rust preview";
+                    height: 24px;
+                    color: #617080;
+                    font-size: 12px;
+                }
+                Rectangle { height: 18px; background: #00000000; }
+                NavigationItem {
+                    label: "PTT";
+                    selected: root.current-page == 0;
+                    activated => { root.current-page = 0; }
+                }
+                NavigationItem {
+                    label: "Profiles";
+                    selected: root.current-page == 1;
+                    activated => { root.current-page = 1; }
+                }
+                NavigationItem {
+                    label: "General settings";
+                    selected: root.current-page == 2;
+                    activated => { root.current-page = 2; }
+                }
+                NavigationItem {
+                    label: "Licenses";
+                    selected: root.current-page == 3;
+                    activated => { root.current-page = 3; }
+                }
+                Rectangle { vertical-stretch: 1; background: #00000000; }
+                Text {
+                    text: "Protocol v1 / AES-GCM v2";
+                    color: #617080;
+                    font-size: 12px;
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 28px;
+                spacing: 18px;
+
+                Text {
+                    text: root.current-page == 0 ? "Push to Talk" :
+                          root.current-page == 1 ? "Profile settings" :
+                          root.current-page == 2 ? "General settings" : "Licenses";
+                    color: #1a2938;
+                    font-size: 30px;
+                    font-weight: 800;
+                }
+
+                Rectangle {
+                    visible: root.current-page == 0;
+                    vertical-stretch: 1;
+                    background: #00000000;
+                    HorizontalLayout {
+                        spacing: 18px;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: #ffffff;
+                            border-color: #d9e1e8;
+                            border-width: 1px;
+                            border-radius: 14px;
+                            VerticalLayout {
+                                padding: 18px;
+                                spacing: 12px;
+                                Text { text: "Current profile"; font-size: 18px; font-weight: 700; color: #263238; }
+                                Text { text: root.profile-name; font-size: 23px; font-weight: 700; color: #153a70; }
+                                Text { text: "Channel " + root.channel-id + " / Sender " + root.sender-id; color: #4b5b6a; }
+                                ComboBox { model: [root.profile-name]; current-index: 0; }
+                                Rectangle { vertical-stretch: 1; background: #00000000; }
+                                Text { text: "Status"; color: #617080; font-size: 13px; }
+                                Text { text: root.connection-status; color: #0d6b45; font-size: 18px; font-weight: 700; }
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 2;
+                            background: #ffffff;
+                            border-color: #d9e1e8;
+                            border-width: 1px;
+                            border-radius: 14px;
+                            VerticalLayout {
+                                padding: 18px;
+                                spacing: 18px;
+                                Text {
+                                    text: root.receive-only ? "Receive-only mode" : "Hold to transmit";
+                                    horizontal-alignment: center;
+                                    color: #4b5b6a;
+                                    font-size: 18px;
+                                }
+                                Rectangle { vertical-stretch: 1; background: #00000000; }
+                                Rectangle {
+                                    width: 270px;
+                                    height: 270px;
+                                    border-radius: self.width / 2;
+                                    background: root.receive-only ? #cbd2da : #d93025;
+                                    Text {
+                                        text: root.receive-only ? "RX ONLY" : "PTT";
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        color: #ffffff;
+                                        font-size: 48px;
+                                        font-weight: 800;
+                                    }
+                                    TouchArea {
+                                        enabled: !root.receive-only;
+                                        pointer-event(event) => {
+                                            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                                root.ptt-pressed();
+                                            }
+                                            if (event.button == PointerEventButton.left && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
+                                                root.ptt-released();
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle { vertical-stretch: 1; background: #00000000; }
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: #ffffff;
+                            border-color: #d9e1e8;
+                            border-width: 1px;
+                            border-radius: 14px;
+                            VerticalLayout {
+                                padding: 18px;
+                                spacing: 12px;
+                                Text { text: "Active speaker"; font-size: 18px; font-weight: 700; color: #263238; }
+                                Text { text: root.active-talker; font-size: 18px; font-weight: 700; color: #153a70; wrap: word-wrap; }
+                                Rectangle { vertical-stretch: 1; background: #00000000; }
+                                Text { text: "Network and audio metrics will appear here."; wrap: word-wrap; color: #617080; }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    visible: root.current-page == 1;
+                    vertical-stretch: 1;
+                    background: #00000000;
+                    VerticalLayout {
+                        spacing: 16px;
+                        Rectangle {
+                            background: #ffffff;
+                            border-color: #d9e1e8;
+                            border-width: 1px;
+                            border-radius: 14px;
+                            height: 164px;
+                            VerticalLayout {
+                                padding: 18px;
+                                spacing: 12px;
+                                Text { text: "Connection"; font-size: 18px; font-weight: 700; color: #263238; }
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    VerticalLayout {
+                                        Text { text: "Profile name"; color: #4b5b6a; }
+                                        LineEdit { text <=> root.profile-name; edited => { root.profile-value-changed(); } }
+                                    }
+                                    VerticalLayout {
+                                        Text { text: "Channel ID"; color: #4b5b6a; }
+                                        LineEdit { text <=> root.channel-id; edited => { root.profile-value-changed(); } }
+                                    }
+                                    VerticalLayout {
+                                        Text { text: "Sender ID"; color: #4b5b6a; }
+                                        LineEdit { text <=> root.sender-id; edited => { root.profile-value-changed(); } }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            background: #ffffff;
+                            border-color: #d9e1e8;
+                            border-width: 1px;
+                            border-radius: 14px;
+                            height: 164px;
+                            VerticalLayout {
+                                padding: 18px;
+                                spacing: 12px;
+                                Text { text: "Audio and security"; font-size: 18px; font-weight: 700; color: #263238; }
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    VerticalLayout {
+                                        Text { text: "Codec"; color: #4b5b6a; }
+                                        ComboBox {
+                                            model: ["Opus", "Codec2", "PCM"];
+                                            current-index <=> root.codec-index;
+                                            selected => { root.profile-value-changed(); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        Text { text: "Bitrate (bps)"; color: #4b5b6a; }
+                                        SpinBox {
+                                            value <=> root.bitrate-bps;
+                                            minimum: 700;
+                                            maximum: 32000;
+                                            enabled: root.codec-index != 2;
+                                            edited => { root.profile-value-changed(); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        CheckBox { text: "Receive-only"; checked <=> root.receive-only; toggled => { root.profile-value-changed(); } }
+                                        CheckBox { text: "Mute self ID"; checked <=> root.mute-self-id; toggled => { root.profile-value-changed(); } }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; background: #00000000; }
+                    }
+                }
+
+                Rectangle {
+                    visible: root.current-page == 2;
+                    vertical-stretch: 1;
+                    background: #ffffff;
+                    border-color: #d9e1e8;
+                    border-width: 1px;
+                    border-radius: 14px;
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 12px;
+                        Text { text: "Application settings"; font-size: 18px; font-weight: 700; color: #263238; }
+                        Text { text: "Transport, device, button mapping, and lock settings will be added here."; wrap: word-wrap; color: #4b5b6a; }
+                    }
+                }
+
+                Rectangle {
+                    visible: root.current-page == 3;
+                    vertical-stretch: 1;
+                    background: #ffffff;
+                    border-color: #d9e1e8;
+                    border-width: 1px;
+                    border-radius: 14px;
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 12px;
+                        Text { text: "Third-party licenses"; font-size: 18px; font-weight: 700; color: #263238; }
+                        Text { text: "MIT application license. Third-party license rendering is scheduled for a later milestone."; wrap: word-wrap; color: #4b5b6a; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+

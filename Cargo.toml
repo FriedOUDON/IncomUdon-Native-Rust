@@ -1,0 +1,29 @@
+﻿[workspace]
+members = [
+    "apps/desktop",
+    "crates/incomudon-audio",
+    "crates/incomudon-core",
+    "crates/incomudon-crypto",
+    "crates/incomudon-platform",
+    "crates/incomudon-protocol",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+license = "MIT"
+repository = "https://github.com/FriedOUDON/IncomUdon-Native-Rust"
+authors = ["FriedOUDON"]
+
+[workspace.dependencies]
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+thiserror = "2"
+slint = { version = "1.17.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "compat-1-2"] }
+slint-build = "1.17.1"
+
+
+

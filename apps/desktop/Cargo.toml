@@ -1,0 +1,18 @@
+﻿[package]
+name = "incomudon-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+incomudon-core = { path = "../../crates/incomudon-core" }
+incomudon-protocol = { path = "../../crates/incomudon-protocol" }
+slint.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
+
+
