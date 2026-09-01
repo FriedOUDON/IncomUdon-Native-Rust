@@ -6,6 +6,7 @@ members = [
     "crates/incomudon-crypto",
     "crates/incomudon-platform",
     "crates/incomudon-protocol",
+    "crates/incomudon-transport",
 ]
 resolver = "2"
 

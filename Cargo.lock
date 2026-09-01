@@ -2405,6 +2405,7 @@ dependencies = [
  "directories",
  "incomudon-core",
  "incomudon-protocol",
+ "incomudon-transport",
  "serde_json",
  "slint",
  "slint-build",
@@ -2420,6 +2421,15 @@ version = "0.1.0"
 name = "incomudon-protocol"
 version = "0.1.0"
 dependencies = [
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "incomudon-transport"
+version = "0.1.0"
+dependencies = [
+ "incomudon-core",
+ "incomudon-protocol",
  "thiserror 2.0.20",
 ]
 

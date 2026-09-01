@@ -51,9 +51,28 @@ impl Default for TransceiverProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub force_ipv4: bool,
+}
+
+impl Default for RelayEndpoint {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1".to_owned(),
+            port: 50_000,
+            force_ipv4: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileStore {
     pub version: u32,
     pub active_profile: usize,
+    #[serde(default)]
+    pub relay: RelayEndpoint,
     pub profiles: Vec<TransceiverProfile>,
 }
 
@@ -62,6 +81,7 @@ impl Default for ProfileStore {
         Self {
             version: PROFILE_STORE_VERSION,
             active_profile: 0,
+            relay: RelayEndpoint::default(),
             profiles: vec![TransceiverProfile::default()],
         }
     }
@@ -83,11 +103,21 @@ pub enum ProfileError {
     MissingBitrate { codec: Codec },
     #[error("PCM profiles must not define a bitrate")]
     PcmBitrateSet,
+    #[error("relay host must not be empty")]
+    EmptyRelayHost,
+    #[error("relay port must be between 1 and 65535")]
+    InvalidRelayPort,
 }
 
 impl ProfileStore {
     pub fn active(&self) -> &TransceiverProfile {
         &self.profiles[self.active_profile]
+    }
+
+    pub fn replace_relay(&mut self, relay: RelayEndpoint) -> Result<(), ProfileError> {
+        validate_relay_endpoint(&relay)?;
+        self.relay = relay;
+        self.validate()
     }
 
     pub fn replace_active(&mut self, profile: TransceiverProfile) -> Result<(), ProfileError> {
@@ -100,6 +130,7 @@ impl ProfileStore {
         if self.version != PROFILE_STORE_VERSION {
             return Err(ProfileError::UnsupportedStoreVersion(self.version));
         }
+        validate_relay_endpoint(&self.relay)?;
         if self.profiles.is_empty() {
             return Err(ProfileError::MissingProfiles);
         }
@@ -120,6 +151,16 @@ impl ProfileStore {
         }
         Ok(())
     }
+}
+
+pub fn validate_relay_endpoint(endpoint: &RelayEndpoint) -> Result<(), ProfileError> {
+    if endpoint.host.trim().is_empty() {
+        return Err(ProfileError::EmptyRelayHost);
+    }
+    if endpoint.port == 0 {
+        return Err(ProfileError::InvalidRelayPort);
+    }
+    Ok(())
 }
 
 pub fn validate_profile(profile: &TransceiverProfile) -> Result<(), ProfileError> {
@@ -165,6 +206,18 @@ mod tests {
         assert_eq!(
             store.validate(),
             Err(ProfileError::DuplicateName("default".to_owned()))
+        );
+    }
+
+    #[test]
+    fn rejects_empty_relay_host() {
+        let endpoint = RelayEndpoint {
+            host: "  ".to_owned(),
+            ..RelayEndpoint::default()
+        };
+        assert_eq!(
+            validate_relay_endpoint(&endpoint),
+            Err(ProfileError::EmptyRelayHost)
         );
     }
 

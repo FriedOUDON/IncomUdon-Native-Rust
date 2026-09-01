@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "incomudon-desktop"
 version.workspace = true
 edition.workspace = true
@@ -11,6 +11,7 @@ build = "build.rs"
 directories.workspace = true
 incomudon-core = { path = "../../crates/incomudon-core" }
 incomudon-protocol = { path = "../../crates/incomudon-protocol" }
+incomudon-transport = { path = "../../crates/incomudon-transport" }
 serde_json.workspace = true
 slint.workspace = true
 thiserror.workspace = true

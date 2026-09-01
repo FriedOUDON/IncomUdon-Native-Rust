@@ -1,0 +1,11 @@
+[package]
+name = "incomudon-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+incomudon-core = { path = "../incomudon-core" }
+incomudon-protocol = { path = "../incomudon-protocol" }
+thiserror.workspace = true
