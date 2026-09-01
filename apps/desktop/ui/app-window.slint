@@ -1,4 +1,4 @@
-﻿import { CheckBox, ComboBox, LineEdit, SpinBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, SpinBox } from "std-widgets.slint";
 
 component NavigationItem inherits Rectangle {
     in property <string> label;
@@ -39,10 +39,12 @@ export component AppWindow inherits Window {
     in-out property <bool> mute-self-id: true;
     in-out property <int> codec-index: 0;
     in-out property <int> bitrate-bps: 16000;
+    in-out property <string> profile-save-status: "";
 
     callback ptt-pressed();
     callback ptt-released();
     callback profile-value-changed();
+    callback save-profile();
 
     HorizontalLayout {
         spacing: 0px;
@@ -271,6 +273,12 @@ export component AppWindow inherits Window {
                             }
                         }
                         Rectangle { vertical-stretch: 1; background: #00000000; }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Button { text: "Save profile"; primary: true; clicked => { root.save-profile(); } }
+                            Text { text: root.profile-save-status; vertical-alignment: center; color: #4b5b6a; }
+                            Rectangle { horizontal-stretch: 1; background: #00000000; }
+                        }
                     }
                 }
 
@@ -307,5 +315,3 @@ export component AppWindow inherits Window {
         }
     }
 }
-
-

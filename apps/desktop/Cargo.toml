@@ -8,11 +8,15 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+directories.workspace = true
 incomudon-core = { path = "../../crates/incomudon-core" }
 incomudon-protocol = { path = "../../crates/incomudon-protocol" }
+serde_json.workspace = true
 slint.workspace = true
+thiserror.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
 
-
+[dev-dependencies]
+tempfile = "3"

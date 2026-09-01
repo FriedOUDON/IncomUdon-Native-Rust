@@ -1,22 +1,29 @@
-﻿//! Platform-neutral application state.
+//! Platform-neutral application state and persisted profile data.
 
 use incomudon_protocol::PacketType;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub const PROFILE_STORE_VERSION: u32 = 1;
+const MAX_PROFILE_NAME_LEN: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Codec {
     Opus,
     Codec2,
     Pcm,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum EncryptionMode {
     AesGcmV2,
     AesGcmV1,
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransceiverProfile {
     pub name: String,
     pub channel_id: u32,
@@ -43,6 +50,131 @@ impl Default for TransceiverProfile {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileStore {
+    pub version: u32,
+    pub active_profile: usize,
+    pub profiles: Vec<TransceiverProfile>,
+}
+
+impl Default for ProfileStore {
+    fn default() -> Self {
+        Self {
+            version: PROFILE_STORE_VERSION,
+            active_profile: 0,
+            profiles: vec![TransceiverProfile::default()],
+        }
+    }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ProfileError {
+    #[error("unsupported profile store version {0}")]
+    UnsupportedStoreVersion(u32),
+    #[error("at least one profile is required")]
+    MissingProfiles,
+    #[error("active profile index {active} is outside {len} profiles")]
+    InvalidActiveProfile { active: usize, len: usize },
+    #[error("profile name must be between 1 and {MAX_PROFILE_NAME_LEN} characters")]
+    InvalidName,
+    #[error("profile name '{0}' is duplicated")]
+    DuplicateName(String),
+    #[error("codec {codec:?} requires a non-zero bitrate")]
+    MissingBitrate { codec: Codec },
+    #[error("PCM profiles must not define a bitrate")]
+    PcmBitrateSet,
+}
+
+impl ProfileStore {
+    pub fn active(&self) -> &TransceiverProfile {
+        &self.profiles[self.active_profile]
+    }
+
+    pub fn replace_active(&mut self, profile: TransceiverProfile) -> Result<(), ProfileError> {
+        validate_profile(&profile)?;
+        self.profiles[self.active_profile] = profile;
+        self.validate()
+    }
+
+    pub fn validate(&self) -> Result<(), ProfileError> {
+        if self.version != PROFILE_STORE_VERSION {
+            return Err(ProfileError::UnsupportedStoreVersion(self.version));
+        }
+        if self.profiles.is_empty() {
+            return Err(ProfileError::MissingProfiles);
+        }
+        if self.active_profile >= self.profiles.len() {
+            return Err(ProfileError::InvalidActiveProfile {
+                active: self.active_profile,
+                len: self.profiles.len(),
+            });
+        }
+        for (index, profile) in self.profiles.iter().enumerate() {
+            validate_profile(profile)?;
+            if self.profiles[..index]
+                .iter()
+                .any(|previous| previous.name.eq_ignore_ascii_case(&profile.name))
+            {
+                return Err(ProfileError::DuplicateName(profile.name.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_profile(profile: &TransceiverProfile) -> Result<(), ProfileError> {
+    let name = profile.name.trim();
+    if name.is_empty() || name.chars().count() > MAX_PROFILE_NAME_LEN {
+        return Err(ProfileError::InvalidName);
+    }
+    match (profile.codec, profile.bitrate_bps) {
+        (Codec::Pcm, Some(_)) => Err(ProfileError::PcmBitrateSet),
+        (Codec::Pcm, None) => Ok(()),
+        (_, Some(value)) if value > 0 => Ok(()),
+        (codec, _) => Err(ProfileError::MissingBitrate { codec }),
+    }
+}
+
 pub fn packet_is_audio(packet_type: PacketType) -> bool {
     matches!(packet_type, PacketType::Audio | PacketType::Fec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_profile_store_is_valid_and_serializable() {
+        let store = ProfileStore::default();
+        store.validate().unwrap();
+
+        let json = serde_json::to_string_pretty(&store).unwrap();
+        let decoded: ProfileStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, store);
+    }
+
+    #[test]
+    fn rejects_duplicate_profile_names_case_insensitively() {
+        let mut store = ProfileStore::default();
+        let duplicate = TransceiverProfile {
+            name: "default".to_owned(),
+            ..TransceiverProfile::default()
+        };
+        store.profiles.push(duplicate);
+
+        assert_eq!(
+            store.validate(),
+            Err(ProfileError::DuplicateName("default".to_owned()))
+        );
+    }
+
+    #[test]
+    fn rejects_pcm_bitrate() {
+        let profile = TransceiverProfile {
+            codec: Codec::Pcm,
+            bitrate_bps: Some(8_000),
+            ..TransceiverProfile::default()
+        };
+        assert_eq!(validate_profile(&profile), Err(ProfileError::PcmBitrateSet));
+    }
 }
