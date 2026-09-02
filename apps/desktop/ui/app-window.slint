@@ -122,8 +122,7 @@ export component AppWindow inherits Window {
                     font-weight: 800;
                 }
 
-                Rectangle {
-                    visible: root.current-page == 0;
+                if root.current-page == 0 : Rectangle {
                     vertical-stretch: 1;
                     background: #00000000;
                     HorizontalLayout {
@@ -213,88 +212,85 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    visible: root.current-page == 1;
+                if root.current-page == 1 : Rectangle {
                     vertical-stretch: 1;
                     background: #00000000;
                     VerticalLayout {
-                        spacing: 16px;
+                        spacing: 12px;
                         Rectangle {
+                            height: 382px;
                             background: #ffffff;
                             border-color: #d9e1e8;
                             border-width: 1px;
                             border-radius: 14px;
-                            height: 164px;
                             VerticalLayout {
-                                padding: 18px;
-                                spacing: 12px;
-                                Text { text: "Connection"; font-size: 18px; font-weight: 700; color: #263238; }
+                                padding: 20px;
+                                spacing: 10px;
+                                Text { text: "Profile identity"; height: 28px; font-size: 18px; font-weight: 700; color: #263238; }
                                 HorizontalLayout {
+                                    height: 42px;
                                     spacing: 12px;
-                                    VerticalLayout {
-                                        Text { text: "Profile name"; color: #4b5b6a; }
-                                        LineEdit { text <=> root.profile-name; edited => { root.profile-value-changed(); } }
+                                    Text { width: 150px; text: "Profile name"; vertical-alignment: center; color: #4b5b6a; }
+                                    LineEdit { height: 34px; horizontal-stretch: 1; text <=> root.profile-name; edited => { root.profile-value-changed(); } }
+                                }
+                                HorizontalLayout {
+                                    height: 42px;
+                                    spacing: 12px;
+                                    Text { width: 150px; text: "Channel ID"; vertical-alignment: center; color: #4b5b6a; }
+                                    LineEdit { height: 34px; horizontal-stretch: 1; text <=> root.channel-id; edited => { root.profile-value-changed(); } }
+                                }
+                                HorizontalLayout {
+                                    height: 42px;
+                                    spacing: 12px;
+                                    Text { width: 150px; text: "Sender ID"; vertical-alignment: center; color: #4b5b6a; }
+                                    LineEdit { height: 34px; horizontal-stretch: 1; text <=> root.sender-id; edited => { root.profile-value-changed(); } }
+                                }
+                                Rectangle { height: 1px; background: #d9e1e8; }
+                                Text { text: "Audio"; height: 28px; font-size: 18px; font-weight: 700; color: #263238; }
+                                HorizontalLayout {
+                                    height: 42px;
+                                    spacing: 12px;
+                                    Text { width: 150px; text: "Codec"; vertical-alignment: center; color: #4b5b6a; }
+                                    ComboBox {
+                                        horizontal-stretch: 1;
+                                        model: ["Opus", "Codec2", "PCM"];
+                                        current-index <=> root.codec-index;
+                                        selected => { root.profile-value-changed(); }
                                     }
-                                    VerticalLayout {
-                                        Text { text: "Channel ID"; color: #4b5b6a; }
-                                        LineEdit { text <=> root.channel-id; edited => { root.profile-value-changed(); } }
+                                }
+                                HorizontalLayout {
+                                    height: 42px;
+                                    spacing: 12px;
+                                    Text { width: 150px; text: "Bitrate (bps)"; vertical-alignment: center; color: #4b5b6a; }
+                                    SpinBox {
+                                        horizontal-stretch: 1;
+                                        value <=> root.bitrate-bps;
+                                        minimum: 700;
+                                        maximum: 32000;
+                                        enabled: root.codec-index != 2;
+                                        edited => { root.profile-value-changed(); }
                                     }
-                                    VerticalLayout {
-                                        Text { text: "Sender ID"; color: #4b5b6a; }
-                                        LineEdit { text <=> root.sender-id; edited => { root.profile-value-changed(); } }
-                                    }
+                                }
+                                HorizontalLayout {
+                                    height: 34px;
+                                    spacing: 20px;
+                                    Rectangle { width: 150px; background: #00000000; }
+                                    CheckBox { text: "Receive-only"; checked <=> root.receive-only; toggled => { root.profile-value-changed(); } }
+                                    CheckBox { text: "Mute self ID"; checked <=> root.mute-self-id; toggled => { root.profile-value-changed(); } }
+                                    Rectangle { horizontal-stretch: 1; background: #00000000; }
                                 }
                             }
                         }
-                        Rectangle {
-                            background: #ffffff;
-                            border-color: #d9e1e8;
-                            border-width: 1px;
-                            border-radius: 14px;
-                            height: 164px;
-                            VerticalLayout {
-                                padding: 18px;
-                                spacing: 12px;
-                                Text { text: "Audio and security"; font-size: 18px; font-weight: 700; color: #263238; }
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    VerticalLayout {
-                                        Text { text: "Codec"; color: #4b5b6a; }
-                                        ComboBox {
-                                            model: ["Opus", "Codec2", "PCM"];
-                                            current-index <=> root.codec-index;
-                                            selected => { root.profile-value-changed(); }
-                                        }
-                                    }
-                                    VerticalLayout {
-                                        Text { text: "Bitrate (bps)"; color: #4b5b6a; }
-                                        SpinBox {
-                                            value <=> root.bitrate-bps;
-                                            minimum: 700;
-                                            maximum: 32000;
-                                            enabled: root.codec-index != 2;
-                                            edited => { root.profile-value-changed(); }
-                                        }
-                                    }
-                                    VerticalLayout {
-                                        CheckBox { text: "Receive-only"; checked <=> root.receive-only; toggled => { root.profile-value-changed(); } }
-                                        CheckBox { text: "Mute self ID"; checked <=> root.mute-self-id; toggled => { root.profile-value-changed(); } }
-                                    }
-                                }
-                            }
-                        }
-                        Rectangle { vertical-stretch: 1; background: #00000000; }
                         HorizontalLayout {
+                            height: 42px;
                             spacing: 12px;
                             Button { text: "Save profile"; primary: true; clicked => { root.save-profile(); } }
-                            Text { text: root.profile-save-status; vertical-alignment: center; color: #4b5b6a; }
-                            Rectangle { horizontal-stretch: 1; background: #00000000; }
+                            Text { text: root.profile-save-status; vertical-alignment: center; color: #4b5b6a; wrap: word-wrap; horizontal-stretch: 1; }
                         }
+                        Rectangle { vertical-stretch: 1; background: #00000000; }
                     }
                 }
-
-                Rectangle {
-                    visible: root.current-page == 2;
+                if root.current-page == 2 : Rectangle {
                     vertical-stretch: 1;
                     background: #ffffff;
                     border-color: #d9e1e8;
@@ -329,8 +325,7 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    visible: root.current-page == 3;
+                if root.current-page == 3 : Rectangle {
                     vertical-stretch: 1;
                     background: #ffffff;
                     border-color: #d9e1e8;

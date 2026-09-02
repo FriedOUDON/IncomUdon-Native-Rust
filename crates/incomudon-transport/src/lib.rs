@@ -17,10 +17,15 @@ use std::{
 };
 
 use incomudon_core::EncryptionMode;
+use incomudon_crypto::{
+    decrypt_aes_gcm_v2, derive_aes_gcm_v2_key, derive_password_key, encrypt_aes_gcm_v2,
+    normalize_password, AES_GCM_V2_KEY_ID,
+};
 use incomudon_protocol::{
     Packet, PacketHeader, PacketType, ProtocolError, SecurityHeader, AUTH_TAG_LEN,
     FIXED_HEADER_LEN, SECURITY_HEADER_LEN,
 };
+use rand::random;
 use thiserror::Error;
 
 pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
@@ -34,6 +39,7 @@ pub struct RelayConfig {
     pub channel_id: u32,
     pub sender_id: u32,
     pub encryption: EncryptionMode,
+    pub password: String,
     pub keepalive_interval: Duration,
 }
 
@@ -49,6 +55,7 @@ impl RelayConfig {
             channel_id,
             sender_id,
             encryption,
+            password: String::new(),
             keepalive_interval: DEFAULT_KEEPALIVE_INTERVAL,
         }
     }
@@ -57,6 +64,7 @@ impl RelayConfig {
 #[derive(Debug, Clone)]
 pub enum RelayCommand {
     Send(Packet),
+    SendPcm(Vec<u8>),
     SendControl {
         packet_type: PacketType,
         payload: Vec<u8>,
@@ -69,6 +77,7 @@ pub enum RelayEvent {
     Connected { local_addr: SocketAddr },
     Sent { packet_type: PacketType },
     Received { packet: Packet },
+    PcmReceived { sender_id: u32, frame: Vec<u8> },
     ReceiveRejected { error: ProtocolError },
     IoError { message: String },
     Stopped,
@@ -156,6 +165,12 @@ impl RelaySession {
             .map_err(|_| TransportError::WorkerUnavailable)
     }
 
+    pub fn send_pcm_frame(&self, frame: Vec<u8>) -> Result<(), TransportError> {
+        self.commands
+            .try_send(RelayCommand::SendPcm(frame))
+            .map_err(|_| TransportError::WorkerUnavailable)
+    }
+
     pub fn try_next_event(&self) -> Option<RelayEvent> {
         self.events.try_recv().ok()
     }
@@ -187,6 +202,7 @@ fn run_worker(
 ) {
     let _ = events.try_send(RelayEvent::Connected { local_addr });
     let mut sequence = 0_u16;
+    let mut media = MediaState::new(&config);
     send_control(
         &socket,
         &config,
@@ -201,6 +217,9 @@ fn run_worker(
     while running.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(1)) {
             Ok(RelayCommand::Send(packet)) => send_packet(&socket, packet, &events),
+            Ok(RelayCommand::SendPcm(frame)) => {
+                send_pcm(&socket, &config, &mut sequence, &mut media, frame, &events)
+            }
             Ok(RelayCommand::SendControl {
                 packet_type,
                 payload,
@@ -218,6 +237,9 @@ fn run_worker(
         loop {
             match commands.try_recv() {
                 Ok(RelayCommand::Send(packet)) => send_packet(&socket, packet, &events),
+                Ok(RelayCommand::SendPcm(frame)) => {
+                    send_pcm(&socket, &config, &mut sequence, &mut media, frame, &events)
+                }
                 Ok(RelayCommand::SendControl {
                     packet_type,
                     payload,
@@ -252,7 +274,13 @@ fn run_worker(
         }
         match socket.recv(&mut buffer) {
             Ok(length) => match Packet::decode(&buffer[..length]) {
-                Ok(packet) => send_event(&events, RelayEvent::Received { packet }),
+                Ok(packet) => {
+                    if let Some((sender_id, frame)) = decode_pcm(&packet, &media.key) {
+                        send_event(&events, RelayEvent::PcmReceived { sender_id, frame });
+                    } else {
+                        send_event(&events, RelayEvent::Received { packet });
+                    }
+                }
                 Err(error) => send_event(&events, RelayEvent::ReceiveRejected { error }),
             },
             Err(error)
@@ -349,6 +377,149 @@ fn send_event(events: &SyncSender<RelayEvent>, event: RelayEvent) {
     let _ = events.try_send(event);
 }
 
+struct MediaState {
+    key: Option<[u8; 32]>,
+    audio_sequence: u16,
+    nonce: u64,
+}
+
+impl MediaState {
+    fn new(config: &RelayConfig) -> Self {
+        Self {
+            key: media_key(config),
+            audio_sequence: 0,
+            nonce: random(),
+        }
+    }
+}
+
+fn media_key(config: &RelayConfig) -> Option<[u8; 32]> {
+    if config.encryption != EncryptionMode::AesGcmV2 {
+        return None;
+    }
+    derive_aes_gcm_v2_key(derive_password_key(
+        normalize_password(&config.password),
+        config.channel_id,
+    ))
+    .ok()
+}
+
+fn send_pcm(
+    socket: &UdpSocket,
+    config: &RelayConfig,
+    sequence: &mut u16,
+    media: &mut MediaState,
+    frame: Vec<u8>,
+    events: &SyncSender<RelayEvent>,
+) {
+    if frame.len() != 320 {
+        send_event(
+            events,
+            RelayEvent::IoError {
+                message: "invalid PCM frame length".to_owned(),
+            },
+        );
+        return;
+    }
+    let mut plaintext = Vec::with_capacity(322);
+    plaintext.extend_from_slice(&media.audio_sequence.to_be_bytes());
+    plaintext.extend_from_slice(&frame);
+    media.audio_sequence = media.audio_sequence.wrapping_add(1);
+    let header = PacketHeader {
+        version: incomudon_protocol::PROTOCOL_VERSION,
+        packet_type: PacketType::Audio,
+        header_len: if config.encryption == EncryptionMode::None {
+            FIXED_HEADER_LEN
+        } else {
+            28
+        },
+        channel_id: config.channel_id,
+        sender_id: config.sender_id,
+        sequence: *sequence,
+        flags: if config.encryption == EncryptionMode::AesGcmV2 {
+            incomudon_protocol::FLAG_AES_GCM_V2
+        } else {
+            0
+        },
+    };
+    *sequence = sequence.wrapping_add(1);
+    let packet = if config.encryption == EncryptionMode::None {
+        Packet::Plain {
+            header,
+            payload: plaintext,
+        }
+    } else if let Some(key) = media.key {
+        let security = SecurityHeader {
+            nonce: media.nonce,
+            key_id: AES_GCM_V2_KEY_ID,
+        };
+        media.nonce = media.nonce.wrapping_add(1);
+        let mut aad = header.encode();
+        aad.extend_from_slice(&security.encode());
+        match encrypt_aes_gcm_v2(key, security.nonce, &plaintext, &aad) {
+            Ok(mut encrypted) => {
+                let tag_start = encrypted.len() - AUTH_TAG_LEN;
+                let tag: [u8; AUTH_TAG_LEN] = encrypted
+                    .split_off(tag_start)
+                    .try_into()
+                    .expect("tag length");
+                Packet::Secured {
+                    header,
+                    security,
+                    payload: encrypted,
+                    auth_tag: tag,
+                }
+            }
+            Err(_) => {
+                send_event(
+                    events,
+                    RelayEvent::IoError {
+                        message: "PCM encryption failed".to_owned(),
+                    },
+                );
+                return;
+            }
+        }
+    } else {
+        send_event(
+            events,
+            RelayEvent::IoError {
+                message: "AES-GCM v2 media key is unavailable".to_owned(),
+            },
+        );
+        return;
+    };
+    send_packet(socket, packet, events);
+}
+
+fn decode_pcm(packet: &Packet, key: &Option<[u8; 32]>) -> Option<(u32, Vec<u8>)> {
+    let (header, payload) = match packet {
+        Packet::Plain { header, payload } if header.packet_type == PacketType::Audio => {
+            (header, payload.clone())
+        }
+        Packet::Secured {
+            header,
+            security,
+            payload,
+            auth_tag,
+        } if header.packet_type == PacketType::Audio
+            && header.flags & incomudon_protocol::FLAG_AES_GCM_V2 != 0 =>
+        {
+            let key = key.as_ref()?;
+            let mut encrypted = payload.clone();
+            encrypted.extend_from_slice(auth_tag);
+            let plaintext =
+                decrypt_aes_gcm_v2(*key, security.nonce, &encrypted, &packet.aad()?).ok()?;
+            (header, plaintext)
+        }
+        _ => return None,
+    };
+    if payload.len() != 322 {
+        return None;
+    }
+    Some((header.sender_id, payload[2..].to_vec()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::UdpSocket;
@@ -390,6 +561,40 @@ mod tests {
         let leave_len = relay.recv(&mut buffer).unwrap();
         let leave = Packet::decode(&buffer[..leave_len]).unwrap();
         assert_control_packet(&leave, PacketType::Leave, 3);
+    }
+
+    #[test]
+    fn session_encrypts_and_decodes_pcm_media_frames() {
+        let relay = UdpSocket::bind("127.0.0.1:0").unwrap();
+        relay
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let config = RelayConfig::new(
+            relay.local_addr().unwrap(),
+            111,
+            1002,
+            EncryptionMode::AesGcmV2,
+        );
+        let key = media_key(&config);
+        let mut session = RelaySession::connect(config).unwrap();
+
+        let mut buffer = [0_u8; 1024];
+        let join_len = relay.recv(&mut buffer).unwrap();
+        assert_control_packet(
+            &Packet::decode(&buffer[..join_len]).unwrap(),
+            PacketType::Join,
+            0,
+        );
+
+        let frame = vec![0x5a; 320];
+        session.send_pcm_frame(frame.clone()).unwrap();
+        let audio_len = relay.recv(&mut buffer).unwrap();
+        let audio = Packet::decode(&buffer[..audio_len]).unwrap();
+        let (sender_id, decoded) = decode_pcm(&audio, &key).expect("PCM media packet");
+        assert_eq!(sender_id, 1002);
+        assert_eq!(decoded, frame);
+
+        session.disconnect();
     }
 
     fn assert_control_packet(packet: &Packet, expected_type: PacketType, expected_sequence: u16) {

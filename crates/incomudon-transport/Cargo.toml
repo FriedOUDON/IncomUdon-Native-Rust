@@ -7,5 +7,7 @@ license.workspace = true
 
 [dependencies]
 incomudon-core = { path = "../incomudon-core" }
+incomudon-crypto = { path = "../incomudon-crypto" }
 incomudon-protocol = { path = "../incomudon-protocol" }
+rand.workspace = true
 thiserror.workspace = true

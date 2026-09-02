@@ -9,6 +9,8 @@ build = "build.rs"
 
 [dependencies]
 directories.workspace = true
+cpal.workspace = true
+incomudon-audio = { path = "../../crates/incomudon-audio" }
 incomudon-core = { path = "../../crates/incomudon-core" }
 incomudon-protocol = { path = "../../crates/incomudon-protocol" }
 incomudon-transport = { path = "../../crates/incomudon-transport" }

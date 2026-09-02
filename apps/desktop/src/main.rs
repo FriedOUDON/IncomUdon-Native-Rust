@@ -1,10 +1,17 @@
 slint::include_modules!();
 
+mod desktop_audio;
 mod profile_storage;
+use desktop_audio::DesktopAudio;
 
 use std::{
+    cell::RefCell,
     net::{SocketAddr, ToSocketAddrs},
-    sync::{Arc, Mutex},
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -22,6 +29,8 @@ fn main() -> Result<(), slint::PlatformError> {
     let (store, load_status) = load_profile_store();
     let store = Arc::new(Mutex::new(store));
     let session: SharedRelaySession = Arc::new(Mutex::new(None));
+    let audio = Rc::new(RefCell::new(DesktopAudio::open().ok()));
+    let ptt_active = Arc::new(AtomicBool::new(false));
     let window = AppWindow::new()?;
 
     {
@@ -34,7 +43,10 @@ fn main() -> Result<(), slint::PlatformError> {
     window.set_profile_save_status(SharedString::from(load_status));
 
     let pressed_window = window.as_weak();
+    let pressed_ptt_active = Arc::clone(&ptt_active);
     let pressed_session = Arc::clone(&session);
+    let pressed_store = Arc::clone(&store);
+    let pressed_audio = Rc::clone(&audio);
     window.on_ptt_pressed(move || {
         let Some(window) = pressed_window.upgrade() else {
             return;
@@ -42,18 +54,42 @@ fn main() -> Result<(), slint::PlatformError> {
         if window.get_receive_only() {
             return;
         }
-        match send_ptt_control(&pressed_session, PacketType::PttOn) {
-            Ok(()) => window.set_connection_status(SharedString::from("Requesting talk")),
+        let codec = pressed_store
+            .lock()
+            .expect("profile store lock poisoned")
+            .active()
+            .codec;
+        if codec != Codec::Pcm {
+            window.set_connection_status(SharedString::from(
+                "PCM is currently the only available audio codec",
+            ));
+            return;
+        }
+        let audio = pressed_audio.borrow();
+        let Some(audio) = audio.as_ref() else {
+            window.set_connection_status(SharedString::from("Audio device is unavailable"));
+            return;
+        };
+        audio.discard_capture_frames();
+        match send_pcm_codec_config(&pressed_session)
+            .and_then(|()| send_ptt_control(&pressed_session, PacketType::PttOn))
+        {
+            Ok(()) => {
+                pressed_ptt_active.store(true, Ordering::Release);
+                window.set_connection_status(SharedString::from("Requesting talk"));
+            }
             Err(error) => window.set_connection_status(SharedString::from(error)),
         }
     });
 
     let released_window = window.as_weak();
+    let released_ptt_active = Arc::clone(&ptt_active);
     let released_session = Arc::clone(&session);
     window.on_ptt_released(move || {
         let Some(window) = released_window.upgrade() else {
             return;
         };
+        released_ptt_active.store(false, Ordering::Release);
         match send_ptt_control(&released_session, PacketType::PttOff) {
             Ok(()) => window.set_connection_status(SharedString::from("Connected")),
             Err(error) if error == "Connect to the relay first" => {}
@@ -190,8 +226,27 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let event_window = window.as_weak();
     let event_session = Arc::clone(&session);
+    let event_audio = Rc::clone(&audio);
+    let event_store = Arc::clone(&store);
+    let event_ptt_active = Arc::clone(&ptt_active);
     let event_timer = Timer::default();
-    event_timer.start(TimerMode::Repeated, Duration::from_millis(50), move || {
+    event_timer.start(TimerMode::Repeated, Duration::from_millis(10), move || {
+        if event_ptt_active.load(Ordering::Acquire) {
+            if let Some(audio) = event_audio.borrow().as_ref() {
+                for _ in 0..4 {
+                    let Some(frame) = audio.try_next_capture_frame() else {
+                        break;
+                    };
+                    if let Some(relay) = event_session
+                        .lock()
+                        .expect("relay session lock poisoned")
+                        .as_ref()
+                    {
+                        let _ = relay.send_pcm_frame(frame);
+                    }
+                }
+            }
+        }
         let Some(window) = event_window.upgrade() else {
             return;
         };
@@ -200,7 +255,21 @@ fn main() -> Result<(), slint::PlatformError> {
             let session = event_session.lock().expect("relay session lock poisoned");
             if let Some(relay_session) = session.as_ref() {
                 while let Some(event) = relay_session.try_next_event() {
-                    stopped |= apply_relay_event(&window, event);
+                    match event {
+                        RelayEvent::PcmReceived { sender_id, frame } => {
+                            let profile = event_store
+                                .lock()
+                                .expect("profile store lock poisoned")
+                                .active()
+                                .clone();
+                            if !profile.mute_self_id || sender_id != profile.sender_id {
+                                if let Some(audio) = event_audio.borrow().as_ref() {
+                                    let _ = audio.queue_playback_frame(&frame);
+                                }
+                            }
+                        }
+                        event => stopped |= apply_relay_event(&window, event),
+                    }
                 }
             }
         }
@@ -308,6 +377,17 @@ fn resolve_relay(relay: &RelayEndpoint) -> Result<SocketAddr, String> {
         .next()
         .ok_or_else(|| "no usable IPv4/IPv6 address was resolved".to_owned())
 }
+fn send_pcm_codec_config(session: &SharedRelaySession) -> Result<(), String> {
+    let session = session.lock().expect("relay session lock poisoned");
+    let Some(relay_session) = session.as_ref() else {
+        return Err("Connect to the relay first".to_owned());
+    };
+    // [flags, codec id, mode u16 BE]: PCM uses no bitrate mode.
+    relay_session
+        .send_control(PacketType::CodecConfig, vec![0x01, 0x00, 0x00, 0x00])
+        .map_err(|error| format!("PCM codec configuration send failed: {error}"))
+}
+
 fn send_ptt_control(session: &SharedRelaySession, packet_type: PacketType) -> Result<(), String> {
     let session = session.lock().expect("relay session lock poisoned");
     let Some(relay_session) = session.as_ref() else {
@@ -329,6 +409,7 @@ fn apply_relay_event(window: &AppWindow, event: RelayEvent) -> bool {
             }
         }
         RelayEvent::Received { packet } => update_talker_from_packet(window, &packet),
+        RelayEvent::PcmReceived { .. } => {}
         RelayEvent::ReceiveRejected { error } => {
             window.set_connection_status(SharedString::from(format!(
                 "Ignored relay packet: {error}"
